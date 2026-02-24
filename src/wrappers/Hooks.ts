@@ -3,6 +3,7 @@ import Misc from "../helpers/Misc";
 import { HookAfter, HookBefore } from "../types/Hooks";
 import Log from "../constants/Log";
 import BatchDownload from "../helpers/BatchDownload";
+import Doc from "../types/Doc";
 import { DocSelectionUI } from "../ui";
 
 declare const unsafeWindow: Window & typeof globalThis;
@@ -352,6 +353,34 @@ export default class Hooks {
             return;
           }
           Misc.log(`Filtrados ${originalCount - filteredCount} archivos por estar en carpetas`, Log.INFO);
+        }
+
+        // Populate upload names for folder groups (docs with uploadId but no upload.name)
+        const uploadIdsToFetch = new Map<number, Doc[]>();
+        docs.forEach(d => {
+          if (d.uploadId && !d.upload?.name) {
+            if (!uploadIdsToFetch.has(d.uploadId)) uploadIdsToFetch.set(d.uploadId, []);
+            uploadIdsToFetch.get(d.uploadId)!.push(d);
+          }
+        });
+
+        // Only fetch info for uploads that are actual folders (2+ files)
+        const folderUploadIds = [...uploadIdsToFetch.entries()].filter(([, arr]) => arr.length >= 2);
+        if (folderUploadIds.length > 0) {
+          btn.textContent = "Obteniendo nombres de carpetas...";
+          await Promise.all(folderUploadIds.map(async ([uploadId, docsInUpload]) => {
+            try {
+              const info = await Api.uploadInfo(uploadId);
+              const uploadName = (info as any).name || (info as any).title || "";
+              if (uploadName) {
+                docsInUpload.forEach(d => {
+                  d.upload = { id: uploadId, name: uploadName };
+                });
+              }
+            } catch (e) {
+              Misc.log(`No se pudo obtener info del upload ${uploadId}: ${e}`, Log.DEBUG);
+            }
+          }));
         }
 
         const selectedDocs = await DocSelectionUI.promptSelection(docs, name);
