@@ -1,7 +1,7 @@
 import JSZip from "jszip";
 import Api from "./Api";
 import Misc from "./Misc";
-import { ProgressUI } from "../ui";
+import { ProgressUI, CaptchaHelperUI } from "../ui";
 import handlePDF from "./Cleaner";
 import Log from "../constants/Log";
 import Doc from "../types/Doc";
@@ -26,29 +26,12 @@ export default class BatchDownload {
             }
         };
 
-        const waitForCaptchaCounterPositive = async (): Promise<boolean> => {
-            let lastShown: number | null = null;
-            while (!progress.isCancelled()) {
-                const current = await getCaptchaCounter();
-                if (current !== null && current !== lastShown) {
-                    lastShown = current;
-                    progress.setError(
-                        `Esperando captcha…\n` +
-                        `Descargas disponibles: ${current}\n` +
-                        `Cuando completes el captcha en Wuolah, el script seguirá automáticamente.`
-                    );
-                }
-
-                if (current !== null && current > 0) {
-                    return true;
-                }
-                await sleep(1000);
-            }
-            return false;
+        const showCaptchaHelper = async (): Promise<boolean> => {
+            const helper = new CaptchaHelperUI();
+            progress.onCancel(() => helper.close());
+            const resolved = await helper.show();
+            return resolved;
         };
-
-        let captchaExplained = false;
-
         try {
             progress.setStatus("Comprobando captchaCounter…");
             const me = await Api.me();
@@ -71,6 +54,7 @@ export default class BatchDownload {
         let completed = 0;
         let failed = false;
         let fatalError: string | null = null;
+        const skippedDocs: { name: string; reason: string }[] = [];
 
         const setStatusSafe = (text: string) => {
             if (!isPaused && !failed && !progress.isCancelled()) {
@@ -101,31 +85,12 @@ export default class BatchDownload {
 
             await refreshTokens();
 
-            if (!captchaExplained) {
-                const ok = confirm(
-                    `No se pudo continuar descargando${docName ? ` (${docName})` : ""} por culpa de un captcha.\n\n` +
-                    `No cierres esta ventana!!\n\n` +
-                    `Para seguir con la descarga:\n` +
-                    `1) Descarga cualquier archivo individual desde la web de Wuolah para que aparezca el captcha\n` +
-                    `2) Resuélvelo\n` +
-                    `3) El script continuará automáticamente\n\n` +
-                    `Pulsa Cancelar para cancelar la descarga.`
-                );
-
-                if (!ok) {
-                    isPaused = false;
-                    pauseResolver?.(false);
-                    return false;
-                }
-                captchaExplained = true;
-            }
-
             progress.setError(
                 `Esperando captcha${docName ? `: ${docName}` : ""}\n` +
-                `Resuélvelo en Wuolah. El script continuará automáticamente cuando puedas volver a descargar.`
+                `Resuelve el captcha en la ventana que ha aparecido.`
             );
 
-            const resumed = await waitForCaptchaCounterPositive();
+            const resumed = await showCaptchaHelper();
             await refreshTokens();
 
             isPaused = false;
@@ -153,7 +118,7 @@ export default class BatchDownload {
                     }
 
                     if (availableTokens !== null && availableTokens <= 0) {
-                        if (!await triggerPause()) return;
+                        if (!await triggerPause(doc.name)) return;
                         continue;
                     }
 
@@ -239,13 +204,25 @@ export default class BatchDownload {
                             if (dl.status === 429 && dl.code === "FI008") {
                                 if (!await triggerPause(doc.name)) return;
                             } else {
-                                throw new Error(`download failed (status ${dl.status}${dl.code ? `, code ${dl.code}` : ""})`);
+                                // Error irrecuperable para este archivo (ej. 400/DW002) => saltar
+                                const reason = `status ${dl.status}${dl.code ? `, code ${dl.code}` : ""}`;
+                                Misc.log(`Saltando ${doc.name}: ${reason}`, Log.INFO);
+                                skippedDocs.push({ name: doc.name, reason });
+                                completed++;
+                                progress.setProgress(completed, docs.length);
+                                setStatusSafe(`Completado ${completed}/${docs.length} (${doc.name} no disponible)`);
+                                success = true; // marcar como "procesado" para continuar
                             }
                         }
                     } catch (e) {
-                        failed = true;
-                        fatalError = e instanceof Error ? e.message : String(e);
-                        return;
+                        // Error de red u otro error inesperado para este archivo => saltar
+                        const reason = e instanceof Error ? e.message : String(e);
+                        Misc.log(`Error descargando ${doc.name}: ${reason}`, Log.ERROR);
+                        skippedDocs.push({ name: doc.name, reason });
+                        completed++;
+                        progress.setProgress(completed, docs.length);
+                        setStatusSafe(`Completado ${completed}/${docs.length} (error en ${doc.name})`);
+                        success = true;
                     }
                 }
             }
@@ -253,27 +230,47 @@ export default class BatchDownload {
 
         await Promise.all(workers);
 
-        if (!failed) {
-            progress.setStatus("Generando ZIP…");
-            progress.setProgress(docs.length, docs.length);
-            zip.generateAsync({ type: "base64" }).then((bs64: string) => {
-                const a = document.createElement('a');
-                a.href = "data:application/zip;base64," + bs64;
-                a.setAttribute("download", `${batchName}.zip`);
-                a.click();
-                a.remove();
-                progress.done(`ZIP listo: ${batchName}.zip`);
-                setTimeout(() => progress.remove(), 5000);
-            }).catch((err: any) => {
-                Misc.log(err, Log.ERROR);
-                progress.setError("Error generando el ZIP");
-            })
-        } else {
-            if (progress.isCancelled()) {
-                progress.setError("Descarga cancelada por el usuario");
-            } else {
-                progress.setError(`Descarga interrumpida${fatalError ? `\n${fatalError}` : ""}`);
-            }
+        if (progress.isCancelled()) {
+            progress.setError("Descarga cancelada por el usuario");
+            return;
         }
+
+        const totalOk = completed - skippedDocs.length;
+
+        if (totalOk === 0) {
+            const skipList = skippedDocs.map(s => `• ${s.name}: ${s.reason}`).join("\n");
+            progress.setError(
+                `No se pudo descargar ningún archivo.\n${skipList}`
+            );
+            return;
+        }
+
+        progress.setStatus("Generando ZIP…");
+        progress.setProgress(docs.length, docs.length);
+        zip.generateAsync({ type: "base64" }).then((bs64: string) => {
+            const a = document.createElement('a');
+            a.href = "data:application/zip;base64," + bs64;
+            a.setAttribute("download", `${batchName}.zip`);
+            a.click();
+            a.remove();
+
+            let msg = `ZIP listo: ${batchName}.zip (${totalOk} archivos)`;
+            if (skippedDocs.length > 0) {
+                msg += `\n⚠️ ${skippedDocs.length} archivo(s) no disponible(s):`;
+                for (const s of skippedDocs) {
+                    msg += `\n  • ${s.name}`;
+                }
+            }
+
+            if (skippedDocs.length > 0) {
+                progress.setError(msg);
+            } else {
+                progress.done(msg);
+            }
+            setTimeout(() => progress.remove(), skippedDocs.length > 0 ? 10000 : 5000);
+        }).catch((err: any) => {
+            Misc.log(err, Log.ERROR);
+            progress.setError("Error generando el ZIP");
+        })
     }
 }

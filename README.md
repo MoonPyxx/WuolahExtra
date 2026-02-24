@@ -1,4 +1,4 @@
-# WuolahExtra
+# WuolahExtra (Fork)
 Userscript para Wuolah.
 
 Para usar este programa necesitas un gestor de userscripts (por ejemplo, [ViolentMonkey](https://violentmonkey.github.io)) instalado en tu navegador.
@@ -12,6 +12,9 @@ Para usar este programa necesitas un gestor de userscripts (por ejemplo, [Violen
   * Vídeos antes de descargar
 * Forzar modo oscuro
 
+* **Descarga de Carpetas**: 
+  * Descarga carpetas completas con un solo click.
+  * Organización automática en subcarpetas según el autor de la subida.
 ## Instalación
 Una vez hayas descargado tu gestor de userscripts, descarga el script desde la sección de [Releases](https://github.com/pablouser1/WuolahExtra/releases), ¡y listo!
 
@@ -54,7 +57,7 @@ yarn build
 ## TODO
 * Para los métodos GULAG / PDFLib
   * Eliminar los anuncios de los pdfs contenidos en los zips
-  * Encontrar la forma de sacar el nombre original del archivo
+  * ~~Encontrar la forma de sacar el nombre original del archivo~~ (Completado)
 * Eliminar dependencia `GM_config` e implementar la configuración usando exclusivamente `GM.getValue` y `GM.setValue`
 
 ## Créditos

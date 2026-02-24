@@ -1,4 +1,5 @@
 export { default as CaptchaCounterDebugUI } from "./CaptchaCounterDebugUI";
+export { default as CaptchaHelperUI } from "./CaptchaHelperUI";
 export { default as ProgressUI } from "./ProgressUI";
 export { default as DocSelectionUI } from "./DocSelectionUI";
 
