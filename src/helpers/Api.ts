@@ -3,7 +3,17 @@ import ApiRes from "../types/ApiRes";
 import Doc from "../types/Doc";
 import DocUrl from "../types/DocUrl";
 import DownloadBody from "../types/DownloadBody";
+import Log from "../constants/Log";
 import Misc from "./Misc";
+
+declare const unsafeWindow: Window & typeof globalThis;
+declare const GM: any;
+
+interface VMScriptResponseObject<T> {
+  status: number;
+  responseText: string;
+  response: T;
+}
 
 /**
  * Wuolah API
@@ -13,17 +23,59 @@ export default class Api {
   static TOKEN_KEY = "token";
 
   /**
-   * Devuelve el perfil del usuario actual.
-   * Nota: usa `origFetch` para evitar hooks de userscript (p.ej. makePro).
+   * Realiza una petición usando GM.xmlHttpRequest para saltarse CORS y enviar cookies
    */
-  static async me(): Promise<{ captchaCounter?: number } & Record<string, unknown>> {
-    const res = await origFetch(`${Api.BASE_URL}/me`, Api._buildInit());
-    const json = (await res.json()) as { captchaCounter?: number } & Record<string, unknown>;
-    return json;
+  private static async _request<T>(details: {
+    url: string;
+    method?: "GET" | "POST" | "PUT" | "DELETE";
+    body?: any;
+    headers?: Record<string, string>;
+  }): Promise<{ data: T; status: number }> {
+    const token = Api._getToken();
+    const headers = details.headers || {};
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
+
+    return new Promise((resolve, reject) => {
+      GM.xmlHttpRequest({
+        method: details.method || "GET",
+        url: details.url,
+        data: details.body ? JSON.stringify(details.body) : undefined,
+        headers: {
+          "Content-Type": "application/json",
+          ...headers,
+        },
+        onload: (res: VMScriptResponseObject<any>) => {
+          try {
+            const data = JSON.parse(res.responseText);
+            resolve({ data, status: res.status });
+          } catch (e) {
+            // Si no se puede parsear JSON pero el status es OK, devolver vacío o error
+            if (res.status >= 200 && res.status < 300) {
+              resolve({ data: {} as T, status: res.status });
+            } else {
+              reject(new Error(`Failed to parse response: ${res.responseText}`));
+            }
+          }
+        },
+        onerror: (err: any) => reject(err),
+      });
+    });
   }
 
   /**
-   * Lista todos los documentos de una carpeta
+   * Devuelve el perfil del usuario actual.
+   */
+  static async me(): Promise<{ captchaCounter?: number } & Record<string, unknown>> {
+    const res = await Api._request<{ captchaCounter?: number } & Record<string, unknown>>({
+      url: `${Api.BASE_URL}/me`
+    });
+    return res.data;
+  }
+
+  /**
+   * Lista todos los documentos de una carpeta o asignatura
    * @param id Id carpeta
    * @returns Todos los documentos pertenecientes a la carpeta
    */
@@ -33,13 +85,31 @@ export default class Api {
     params.append("pagination[page]", "0");
     params.append("pagination[pageSize]", "9999");
     params.append("pagination[withCount]", "false");
+    params.append("include", "uploader,upload,profile"); // Asegurar que viene el autor y la carpeta
 
-    const res = await origFetch(
-      `${Api.BASE_URL}/documents?${params.toString()}`,
-      Api._buildInit()
-    );
-    const json: ApiRes<Doc[]> = await res.json();
-    return json.data;
+    const res = await Api._request<ApiRes<Doc[]>>({
+      url: `${Api.BASE_URL}/documents?${params.toString()}`
+    });
+    return res.data.data;
+  }
+
+  /**
+   * Lista todos los documentos de una asignatura
+   * @param subjectId Id asignatura
+   * @returns Todos los documentos
+   */
+  static async subject(subjectId: number): Promise<Doc[]> {
+    const params = new URLSearchParams();
+    params.append("filter[subjectId]", subjectId.toString());
+    params.append("pagination[page]", "0");
+    params.append("pagination[pageSize]", "9999");
+    params.append("pagination[withCount]", "false");
+    params.append("include", "uploader,upload,profile"); // Asegurar que viene el autor y la carpeta
+
+    const res = await Api._request<ApiRes<Doc[]>>({
+      url: `${Api.BASE_URL}/documents?${params.toString()}`
+    });
+    return res.data.data;
   }
 
   /**
@@ -48,12 +118,24 @@ export default class Api {
    * @returns Datos de la subida
    */
   static async uploadInfo(id: number): Promise<Doc> {
-    const res = await origFetch(
-      `${Api.BASE_URL}/uploads/${id}`,
-      Api._buildInit()
-    );
-    const json: Doc = await res.json();
-    return json;
+    const res = await Api._request<Doc>({
+      url: `${Api.BASE_URL}/uploads/${id}`
+    });
+    return res.data;
+  }
+
+  /**
+   * Obtiene información de una asignatura
+   * @param id Id asignatura
+   */
+  static async subjectInfo(id: number): Promise<{ name: string }> {
+    const res = await Api._request<{ name: string }>({
+      url: `${Api.BASE_URL}/subjects/${id}`
+    });
+    if (res.status === 404) {
+      throw new Error("Subject not found");
+    }
+    return res.data;
   }
 
   /**
@@ -91,26 +173,17 @@ export default class Api {
       ubication3RequestedPubs: 0,
     };
 
-    const bodyStr = JSON.stringify(body);
-    const res = await origFetch(`${Api.BASE_URL}/download`, {
+    const res = await Api._request<DocUrl & { code?: string }>({
+      url: `${Api.BASE_URL}/download`,
       method: "POST",
-      body: bodyStr,
-      ...Api._buildInit(),
+      body
     });
 
-    if (!res.ok) {
-      let code: string | undefined;
-      try {
-        const errJson = (await res.clone().json()) as { code?: string };
-        code = errJson.code;
-      } catch {
-        // ignore
-      }
-      return { url: null, status: res.status, code };
+    if (res.status !== 200) {
+      return { url: null, status: res.status, code: res.data.code };
     }
 
-    const data: DocUrl = await res.json();
-    return { url: data.url, status: res.status };
+    return { url: res.data.url, status: res.status };
   }
 
   /**
@@ -119,20 +192,38 @@ export default class Api {
    * @returns Documento ya descargado como `ArrayBuffer`
    */
   static async docData(url: string): Promise<ArrayBuffer> {
-    const res = await origFetch(url);
-    const buf = await res.arrayBuffer();
-    return buf;
+    try {
+      const res = await origFetch(url);
+      if (res.ok) {
+        return await res.arrayBuffer();
+      }
+    } catch (e) {
+      Misc.log("fallo fetch original para docData, reintentando con GM.xmlHttpRequest", Log.DEBUG);
+    }
+
+    return new Promise((resolve, reject) => {
+      GM.xmlHttpRequest({
+        method: "GET",
+        url: url,
+        responseType: "arraybuffer",
+        onload: (res: VMScriptResponseObject<ArrayBuffer>) => {
+          if (res.status >= 200 && res.status < 300) {
+            resolve(res.response);
+          } else {
+            reject(new Error(`Failed to download file: status ${res.status}`));
+          }
+        },
+        onerror: (err: any) => reject(err),
+      });
+    });
   }
 
   private static _getToken(): string {
-    return Misc.getCookie(Api.TOKEN_KEY);
-  }
+    try {
+      const token = (unsafeWindow as any).localStorage.getItem("wuolah-token");
+      if (token) return token;
+    } catch { }
 
-  private static _buildInit(): RequestInit {
-    return {
-      headers: {
-        Authorization: `Bearer ${Api._getToken()}`,
-      },
-    };
+    return Misc.getCookie(Api.TOKEN_KEY);
   }
 }

@@ -51,8 +51,20 @@ GM_config.init({
     },
     folder_download: {
       type: "checkbox",
-      label: "[EXPERIMENTAL] Descargar carpeta",
-      title: "¡Esta función aún está en desarrollo!",
+      label: "[EXPERIMENTAL] Descargar carpeta/asignatura",
+      title: "Activa los botones de descarga masiva",
+      default: false,
+    },
+    folder_organization: {
+      type: "checkbox",
+      label: "Organizar por carpetas en el ZIP",
+      title: "Agrupa los archivos por autor/carpeta en lugar de soltarlos todos en la raíz",
+      default: true,
+    },
+    exclude_folders: {
+      type: "checkbox",
+      label: "Omitir archivos en carpetas (descarga de asignatura)",
+      title: "Ignora los archivos que forman parte de un grupo/carpeta al descargar la asignatura completa",
       default: false,
     },
     trolah_basic: {
@@ -85,6 +97,9 @@ GM_config.init({
       if (clearMethod === ClearMethods.GULAG) {
         Misc.initGulag();
       }
+
+      // Iniciar detección de asignatura
+      Hooks.initSubjectDetection();
     },
     save: () => {
       const ok = confirm("Los cambios se han guardado, ¿quieres refrescar la página para aplicar los cambios?");
