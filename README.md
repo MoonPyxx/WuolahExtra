@@ -15,6 +15,12 @@ Para usar este programa necesitas un gestor de userscripts (por ejemplo, [Violen
 * **Descarga de Carpetas**: 
   * Descarga carpetas completas con un solo click.
   * Organización automática en subcarpetas según el autor de la subida.
+* **Filtros en descarga masiva**:
+  * Filtrar archivos por **fecha** (desde/hasta) — ideal para asignaturas con cientos de archivos.
+  * Filtrar por **nombre** con palabras clave separadas por comas:
+    * 🔍 **Incluir**: solo muestra archivos que contengan alguna de las palabras (ej: `examen, parcial, tema 1`).
+    * 🚫 **Excluir**: oculta archivos que contengan alguna de las palabras (ej: `solución, borrador`).
+  * Búsqueda **insensible a mayúsculas y tildes** (`practica` = `Práctica` = `PRÁCTICA`).
 ## Instalación
 Una vez hayas descargado tu gestor de userscripts, descarga el script desde la sección de [Releases](https://github.com/pablouser1/WuolahExtra/releases), ¡y listo!
 

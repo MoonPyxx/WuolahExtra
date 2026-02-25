@@ -5,8 +5,11 @@ import { ProgressUI, CaptchaHelperUI } from "../ui";
 import handlePDF from "./Cleaner";
 import Log from "../constants/Log";
 import Doc from "../types/Doc";
+import { origcreateObjectURL } from "../originals";
 
 export default class BatchDownload {
+    static MAX_FILES_PER_ZIP = 200;
+
     static async start(docs: Doc[], batchName: string) {
         const zip = new JSZip();
         const progress = new ProgressUI(`Descargando ${batchName}`);
@@ -245,16 +248,61 @@ export default class BatchDownload {
             return;
         }
 
-        progress.setStatus("Generando ZIP…");
-        progress.setProgress(docs.length, docs.length);
-        zip.generateAsync({ type: "base64" }).then((bs64: string) => {
+        // Collect all files added to the zip
+        const allFileNames = Object.keys(zip.files).filter(name => !zip.files[name].dir);
+
+        const downloadBlob = (blob: Blob, fileName: string) => {
+            const url = origcreateObjectURL(blob);
             const a = document.createElement('a');
-            a.href = "data:application/zip;base64," + bs64;
-            a.setAttribute("download", `${batchName}.zip`);
+            a.href = url;
+            a.setAttribute("download", fileName);
             a.click();
             a.remove();
+            // Liberar memoria después de un momento
+            setTimeout(() => URL.revokeObjectURL(url), 5000);
+        };
 
-            let msg = `ZIP listo: ${batchName}.zip (${totalOk} archivos)`;
+        try {
+            if (allFileNames.length <= BatchDownload.MAX_FILES_PER_ZIP) {
+                // Un solo ZIP
+                progress.setStatus("Generando ZIP…");
+                progress.setProgress(docs.length, docs.length);
+                const blob = await zip.generateAsync({ type: "blob" });
+                downloadBlob(blob, `${batchName}.zip`);
+            } else {
+                // Dividir en múltiples ZIPs
+                const totalParts = Math.ceil(allFileNames.length / BatchDownload.MAX_FILES_PER_ZIP);
+                progress.setStatus(`Generando ${totalParts} ZIPs…`);
+
+                for (let part = 0; part < totalParts; part++) {
+                    if (progress.isCancelled()) break;
+
+                    const start = part * BatchDownload.MAX_FILES_PER_ZIP;
+                    const end = Math.min(start + BatchDownload.MAX_FILES_PER_ZIP, allFileNames.length);
+                    const partFiles = allFileNames.slice(start, end);
+
+                    progress.setStatus(`Generando ZIP parte ${part + 1}/${totalParts} (${partFiles.length} archivos)…`);
+
+                    const partZip = new JSZip();
+                    for (const fileName of partFiles) {
+                        const fileData = await zip.files[fileName].async("uint8array");
+                        partZip.file(fileName, fileData, { binary: true });
+                    }
+
+                    const blob = await partZip.generateAsync({ type: "blob" });
+                    downloadBlob(blob, `${batchName}_parte${part + 1}.zip`);
+
+                    // Pequeña pausa entre descargas para no saturar el navegador
+                    if (part < totalParts - 1) {
+                        await sleep(1000);
+                    }
+                }
+            }
+
+            let msg = allFileNames.length <= BatchDownload.MAX_FILES_PER_ZIP
+                ? `ZIP listo: ${batchName}.zip (${totalOk} archivos)`
+                : `ZIPs listos: ${Math.ceil(allFileNames.length / BatchDownload.MAX_FILES_PER_ZIP)} partes (${totalOk} archivos)`;
+
             if (skippedDocs.length > 0) {
                 msg += `\n⚠️ ${skippedDocs.length} archivo(s) no disponible(s):`;
                 for (const s of skippedDocs) {
@@ -268,9 +316,9 @@ export default class BatchDownload {
                 progress.done(msg);
             }
             setTimeout(() => progress.remove(), skippedDocs.length > 0 ? 10000 : 5000);
-        }).catch((err: any) => {
+        } catch (err: any) {
             Misc.log(err, Log.ERROR);
-            progress.setError("Error generando el ZIP");
-        })
+            progress.setError("Error generando el ZIP: " + (err?.message || err));
+        }
     }
 }

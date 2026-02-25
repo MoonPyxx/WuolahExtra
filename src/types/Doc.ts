@@ -16,4 +16,5 @@ export default interface Doc {
     id: number;
     name: string;
   };
+  createdAt?: string;
 }

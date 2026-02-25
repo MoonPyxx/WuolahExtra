@@ -57,7 +57,9 @@ export default class DocSelectionUI {
             Object.assign(controls.style, {
                 display: "flex",
                 gap: "10px",
-                marginBottom: "15px"
+                marginBottom: "10px",
+                flexWrap: "wrap",
+                alignItems: "center"
             });
 
             const btnStyle = {
@@ -85,6 +87,120 @@ export default class DocSelectionUI {
 
             controls.appendChild(selectAllBtn);
             controls.appendChild(deselectAllBtn);
+
+            // ── Filter section ──
+            const filterSection = document.createElement("div");
+            Object.assign(filterSection.style, {
+                display: "flex",
+                flexDirection: "column",
+                gap: "8px",
+                marginBottom: "15px",
+                padding: "12px",
+                background: "rgba(255,255,255,0.03)",
+                borderRadius: "8px",
+                border: "1px solid rgba(255,255,255,0.08)"
+            });
+
+            const filterInputStyle = {
+                background: "rgba(255,255,255,0.08)",
+                border: "1px solid rgba(255,255,255,0.2)",
+                color: "#fff",
+                borderRadius: "6px",
+                padding: "5px 10px",
+                fontSize: "13px",
+                outline: "none",
+                colorScheme: "dark"
+            };
+
+            const filterLabelStyle = { fontSize: "13px", color: "#fff", opacity: "0.85", whiteSpace: "nowrap" as const };
+
+            // -- Date row --
+            const dateRow = document.createElement("div");
+            Object.assign(dateRow.style, { display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" });
+
+            const dateFromLabel = document.createElement("label");
+            dateFromLabel.textContent = "📅 Desde:";
+            Object.assign(dateFromLabel.style, filterLabelStyle);
+
+            const dateFromInput = document.createElement("input");
+            dateFromInput.type = "date";
+            Object.assign(dateFromInput.style, { ...filterInputStyle, cursor: "pointer" });
+
+            const dateToLabel = document.createElement("label");
+            dateToLabel.textContent = "Hasta:";
+            Object.assign(dateToLabel.style, filterLabelStyle);
+
+            const dateToInput = document.createElement("input");
+            dateToInput.type = "date";
+            Object.assign(dateToInput.style, { ...filterInputStyle, cursor: "pointer" });
+
+            dateRow.appendChild(dateFromLabel);
+            dateRow.appendChild(dateFromInput);
+            dateRow.appendChild(dateToLabel);
+            dateRow.appendChild(dateToInput);
+
+            // -- Name include row --
+            const includeRow = document.createElement("div");
+            Object.assign(includeRow.style, { display: "flex", gap: "10px", alignItems: "center" });
+
+            const includeLabel = document.createElement("label");
+            includeLabel.textContent = "🔍 Incluir:";
+            Object.assign(includeLabel.style, filterLabelStyle);
+
+            const includeInput = document.createElement("input");
+            includeInput.type = "text";
+            includeInput.placeholder = "ej: tema 1, examen, práctica";
+            Object.assign(includeInput.style, { ...filterInputStyle, flex: "1", minWidth: "0" });
+
+            includeRow.appendChild(includeLabel);
+            includeRow.appendChild(includeInput);
+
+            // -- Name exclude row --
+            const excludeRow = document.createElement("div");
+            Object.assign(excludeRow.style, { display: "flex", gap: "10px", alignItems: "center" });
+
+            const excludeLabel = document.createElement("label");
+            excludeLabel.textContent = "🚫 Excluir:";
+            Object.assign(excludeLabel.style, filterLabelStyle);
+
+            const excludeInput = document.createElement("input");
+            excludeInput.type = "text";
+            excludeInput.placeholder = "ej: solución, borrador";
+            Object.assign(excludeInput.style, { ...filterInputStyle, flex: "1", minWidth: "0" });
+
+            excludeRow.appendChild(excludeLabel);
+            excludeRow.appendChild(excludeInput);
+
+            // -- Filter footer (clear + count) --
+            const filterFooter = document.createElement("div");
+            Object.assign(filterFooter.style, { display: "flex", gap: "10px", alignItems: "center" });
+
+            const clearFiltersBtn = document.createElement("button");
+            clearFiltersBtn.textContent = "✕ Limpiar filtros";
+            Object.assign(clearFiltersBtn.style, {
+                ...btnStyle,
+                fontSize: "12px",
+                padding: "5px 10px",
+                opacity: "0.7"
+            });
+            clearFiltersBtn.onmouseenter = () => { clearFiltersBtn.style.background = "rgba(255,255,255,0.2)"; clearFiltersBtn.style.opacity = "1"; };
+            clearFiltersBtn.onmouseleave = () => { clearFiltersBtn.style.background = "rgba(255,255,255,0.1)"; clearFiltersBtn.style.opacity = "0.7"; };
+
+            const filterCountEl = document.createElement("span");
+            Object.assign(filterCountEl.style, {
+                fontSize: "12px",
+                color: "#3b82f6",
+                fontWeight: "500",
+                marginLeft: "auto"
+            });
+
+            filterFooter.appendChild(clearFiltersBtn);
+            filterFooter.appendChild(filterCountEl);
+
+            filterSection.appendChild(dateRow);
+            filterSection.appendChild(includeRow);
+            filterSection.appendChild(excludeRow);
+            filterSection.appendChild(filterFooter);
 
             const listContainer = document.createElement("div");
             Object.assign(listContainer.style, {
@@ -362,9 +478,112 @@ export default class DocSelectionUI {
                 renderStandaloneItem(doc);
             });
 
+            // ── Combined filter logic (date + name) ──
+            const normalize = (s: string): string => {
+                return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+            };
+
+            const parseKeywords = (input: string): string[] => {
+                return input.split(",").map(s => normalize(s.trim())).filter(s => s.length > 0);
+            };
+
+            const isDocVisible = (doc: Doc): boolean => {
+                // Date filter
+                if (doc.createdAt) {
+                    const docDate = new Date(doc.createdAt);
+                    if (!isNaN(docDate.getTime())) {
+                        const from = dateFromInput.value ? new Date(dateFromInput.value + "T00:00:00") : null;
+                        const to = dateToInput.value ? new Date(dateToInput.value + "T23:59:59") : null;
+                        if (from && docDate < from) return false;
+                        if (to && docDate > to) return false;
+                    }
+                }
+
+                const docName = normalize(doc.name);
+
+                // Include filter: doc must match at least one keyword
+                const includeKeywords = parseKeywords(includeInput.value);
+                if (includeKeywords.length > 0) {
+                    const matches = includeKeywords.some(kw => docName.includes(kw));
+                    if (!matches) return false;
+                }
+
+                // Exclude filter: doc must NOT match any keyword
+                const excludeKeywords = parseKeywords(excludeInput.value);
+                if (excludeKeywords.length > 0) {
+                    const excluded = excludeKeywords.some(kw => docName.includes(kw));
+                    if (excluded) return false;
+                }
+
+                return true;
+            };
+
+            const hasActiveFilters = (): boolean => {
+                return !!(dateFromInput.value || dateToInput.value || includeInput.value.trim() || excludeInput.value.trim());
+            };
+
+            const applyFilters = () => {
+                let visibleCount = 0;
+                checkboxes.forEach(c => {
+                    const visible = isDocVisible(c.doc);
+                    c.labelEl.style.display = visible ? "flex" : "none";
+                    if (!visible) {
+                        c.cb.checked = false;
+                    } else {
+                        c.cb.checked = true;
+                        visibleCount++;
+                    }
+                });
+
+                // Update group container visibility
+                const groupContainers = listContainer.querySelectorAll<HTMLElement>(":scope > div");
+                groupContainers.forEach(container => {
+                    const labels = container.querySelectorAll<HTMLElement>("label");
+                    if (labels.length === 0) return;
+                    const anyVisible = Array.from(labels).some(l => l.style.display !== "none");
+                    container.style.display = anyVisible ? "flex" : "none";
+                });
+
+                if (hasActiveFilters()) {
+                    filterCountEl.textContent = `${visibleCount} de ${docs.length} archivos`;
+                } else {
+                    filterCountEl.textContent = "";
+                }
+
+                updateCount();
+            };
+
+            // Debounce for text inputs
+            let filterTimeout: ReturnType<typeof setTimeout> | null = null;
+            const applyFiltersDebounced = () => {
+                if (filterTimeout) clearTimeout(filterTimeout);
+                filterTimeout = setTimeout(applyFilters, 300);
+            };
+
+            dateFromInput.onchange = applyFilters;
+            dateToInput.onchange = applyFilters;
+            includeInput.oninput = applyFiltersDebounced;
+            excludeInput.oninput = applyFiltersDebounced;
+
+            clearFiltersBtn.onclick = () => {
+                dateFromInput.value = "";
+                dateToInput.value = "";
+                includeInput.value = "";
+                excludeInput.value = "";
+                // Re-show and re-check all
+                checkboxes.forEach(c => {
+                    c.labelEl.style.display = "flex";
+                    c.cb.checked = true;
+                });
+                const groupContainers = listContainer.querySelectorAll<HTMLElement>(":scope > div");
+                groupContainers.forEach(container => container.style.display = "flex");
+                filterCountEl.textContent = "";
+                updateCount();
+            };
+
             const updateCount = () => {
                 groupCheckers.forEach(fn => fn());
-                const count = checkboxes.filter(c => c.cb.checked).length;
+                const count = checkboxes.filter(c => c.cb.checked && c.labelEl.style.display !== "none").length;
                 downloadBtn.textContent = `Descargar seleccionados (${count})`;
                 downloadBtn.disabled = count === 0;
                 if (count === 0) {
@@ -381,12 +600,16 @@ export default class DocSelectionUI {
             });
 
             selectAllBtn.onclick = () => {
-                checkboxes.forEach(c => c.cb.checked = true);
+                checkboxes.forEach(c => {
+                    if (c.labelEl.style.display !== "none") c.cb.checked = true;
+                });
                 updateCount();
             };
 
             deselectAllBtn.onclick = () => {
-                checkboxes.forEach(c => c.cb.checked = false);
+                checkboxes.forEach(c => {
+                    if (c.labelEl.style.display !== "none") c.cb.checked = false;
+                });
                 updateCount();
             };
 
@@ -440,7 +663,7 @@ export default class DocSelectionUI {
 
             downloadBtn.onclick = () => {
                 if (downloadBtn.disabled) return;
-                const selectedDocs = checkboxes.filter(c => c.cb.checked).map(c => c.doc);
+                const selectedDocs = checkboxes.filter(c => c.cb.checked && c.labelEl.style.display !== "none").map(c => c.doc);
                 document.body.removeChild(wrapper);
                 resolve(selectedDocs);
             };
@@ -451,6 +674,7 @@ export default class DocSelectionUI {
             modal.appendChild(titleEl);
             modal.appendChild(subtitleEl);
             modal.appendChild(controls);
+            modal.appendChild(filterSection);
             modal.appendChild(listContainer);
             modal.appendChild(buttons);
             wrapper.appendChild(modal);
